@@ -8,8 +8,23 @@ from ib_async import IB, Future, ContFuture, LimitOrder, StopOrder, StopLimitOrd
 
 import random
 import atexit
+import pandas as pd
+import numpy as np
 
 from algokitforge.models.portfolio import Transaction, AccountState
+
+# PatternPy chart-pattern detection
+from tradingpatterns.tradingpatterns import (
+    detect_head_shoulder,
+    detect_multiple_tops_bottoms,
+    calculate_support_resistance,
+    detect_triangle_pattern,
+    detect_wedge,
+    detect_channel,
+    detect_double_top_bottom,
+    detect_trendline,
+    find_pivots,
+)
 
 # ---------------------------------------------------------------------------
 # Singleton IB connection
@@ -44,7 +59,9 @@ async def get_ib() -> IB:
 # ---------------------------------------------------------------------------
 # Contract helpers — MNQ and MGC only
 # ---------------------------------------------------------------------------
-ALLOWED_SYMBOLS = {"MNQ", "MGC"}
+# Default to MNQ to keep API costs lower, but allow override via env var
+_env_symbols = os.getenv("ALLOWED_SYMBOLS", "MNQ")
+ALLOWED_SYMBOLS = set(s.strip() for s in _env_symbols.split(",") if s.strip())
 
 SYMBOL_CONFIG = {
     "MNQ": {"exchange": "CME", "currency": "USD", "tick_size": 0.25, "point_value": 2.0},
@@ -160,18 +177,142 @@ async def fetch_candles(symbol: str, bar_size: str, duration: str) -> List[dict]
     return result
 
 
-async def fetch_multi_timeframe_candles(symbol: str) -> dict:
-    """Fetch 5-min, 15-min, and 1-hour candles for a symbol.
+async def _req_historical_with_error_guard(
+    ib: IB,
+    contract,
+    bar_size: str,
+    duration: str,
+) -> list:
+    """Wrap reqHistoricalDataAsync to surface Error 162 as a Python exception.
+
+    IBKR delivers trading errors via the error callback, not as exceptions.
+    We hook into ib_async's error event for the duration of this call so we
+    can raise immediately instead of silently returning empty bars.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+
+    error_event = asyncio.Event()
+    error_code: dict = {}
+
+    def _on_error(req_id, error_code_val, error_string, contract_val, *args):
+        if error_code_val in (162, 200, 321, 322):  # historical-data errors
+            error_code["code"] = error_code_val
+            error_code["msg"] = error_string
+            error_event.set()
+
+    ib.errorEvent += _on_error
+    try:
+        bars_future = asyncio.ensure_future(
+            ib.reqHistoricalDataAsync(
+                contract,
+                endDateTime='',
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow='TRADES',
+                useRTH=False,
+                formatDate=2,
+            )
+        )
+        # Race: bars arrive vs error fires
+        done, pending = await asyncio.wait(
+            [bars_future, asyncio.ensure_future(error_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+
+        if error_event.is_set():
+            code = error_code.get("code", 0)
+            msg  = error_code.get("msg", "IBKR data error")
+            raise RuntimeError(f"IBKR Error {code}: {msg}")
+
+        return bars_future.result()
+    finally:
+        ib.errorEvent -= _on_error
+
+
+async def fetch_candles(symbol: str, bar_size: str, duration: str) -> List[dict]:
+    """Fetch historical candlestick data for a futures contract.
+
+    Handles Error 162 (WSL2 IP mismatch) by reconnecting once and retrying.
+
+    Args:
+        symbol:   MNQ or MGC
+        bar_size: e.g. '5 mins', '15 mins', '1 hour'
+        duration: e.g. '1 D', '2 D', '5 D'
 
     Returns:
-        dict with keys '5min', '15min', '1hour', each containing list of candle dicts
+        List of dicts with keys: date, open, high, low, close, volume.
+        Returns [] if IBKR rejects the request after a retry.
     """
-    candles_5m = await fetch_candles(symbol, '5 mins', '1 D')
-    candles_15m = await fetch_candles(symbol, '15 mins', '2 D')
-    candles_1h = await fetch_candles(symbol, '1 hour', '5 D')
+    import logging
+    _log = logging.getLogger(__name__)
+
+    for attempt in range(2):  # try once, reconnect, try again
+        try:
+            ib       = await get_ib()
+            contract = await qualify_contract(symbol)
+            bars     = await _req_historical_with_error_guard(ib, contract, bar_size, duration)
+
+            return [
+                {
+                    "date":   str(bar.date),
+                    "open":   bar.open,
+                    "high":   bar.high,
+                    "low":    bar.low,
+                    "close":  bar.close,
+                    "volume": int(bar.volume) if bar.volume else 0,
+                }
+                for bar in bars
+            ]
+
+        except RuntimeError as exc:
+            if attempt == 0 and "162" in str(exc):
+                # Error 162: force a fresh IB connection and retry once
+                _log.warning(
+                    "Error 162 (IP mismatch) on %s %s — forcing reconnect and retrying...",
+                    symbol, bar_size,
+                )
+                global ib_instance
+                async with _ib_lock:
+                    if ib_instance is not None:
+                        try:
+                            ib_instance.disconnect()
+                        except Exception:
+                            pass
+                        ib_instance = None
+                await asyncio.sleep(3)  # give TWS a moment
+                continue  # retry
+            _log.error("fetch_candles failed for %s %s: %s", symbol, bar_size, exc)
+            return []
+
+        except Exception as exc:
+            _log.error("fetch_candles unexpected error for %s %s: %s", symbol, bar_size, exc)
+            return []
+
+    _log.error("fetch_candles gave up after retry for %s %s", symbol, bar_size)
+    return []
+
+
+async def fetch_multi_timeframe_candles(symbol: str) -> dict:
+    """Fetch 2-min, 5-min, 15-min, and 1-hour candles for a symbol in parallel.
+
+    Returns:
+        dict with keys '2min', '5min', '15min', '1hour', each containing list of candle dicts.
+        Individual timeframes that fail return [] so callers keep running.
+    """
+    candles_2m, candles_5m, candles_15m, candles_1h = await asyncio.gather(
+        fetch_candles(symbol, '2 mins',  '1 D'),
+        fetch_candles(symbol, '5 mins',  '1 D'),
+        fetch_candles(symbol, '15 mins', '2 D'),
+        fetch_candles(symbol, '1 hour',  '5 D'),
+        return_exceptions=False,
+    )
 
     return {
-        "5min": candles_5m,
+        "2min":  candles_2m,
+        "5min":  candles_5m,
         "15min": candles_15m,
         "1hour": candles_1h,
     }
@@ -278,7 +419,7 @@ def compute_ema(closes: List[float], period: int) -> List[Optional[float]]:
 
 
 async def get_technicals_for_symbol(symbol: str) -> dict:
-    """Get full technical analysis data: multi-TF candles + indicators on 5-min."""
+    """Get full technical analysis data: multi-TF candles + indicators + patterns on 5-min."""
     mtf = await fetch_multi_timeframe_candles(symbol)
 
     # Compute indicators on 5-min timeframe
@@ -298,10 +439,25 @@ async def get_technicals_for_symbol(symbol: str) -> dict:
     def last_n(lst, n=tail):
         return lst[-n:] if len(lst) >= n else lst
 
+    # Pivot structure & EMA crossover on 5-min
+    pivot_struct_5m = detect_pivot_structure(candles_5m, lookback=20)
+    ema_cross_5m = detect_ema_crossover(closes, fast_period=9, slow_period=21)
+
+    # Pivot structure on 15-min for higher-TF trend context
+    candles_15m = mtf["15min"]
+    closes_15m = [c["close"] for c in candles_15m]
+    pivot_struct_15m = detect_pivot_structure(candles_15m, lookback=15)
+    ema_cross_15m = detect_ema_crossover(closes_15m, fast_period=9, slow_period=21)
+
+    # PatternPy chart pattern scan on 5-min and 15-min
+    patterns_5m = compute_pattern_analysis(candles_5m)
+    patterns_15m = compute_pattern_analysis(candles_15m)
+
     return {
         "symbol": symbol,
+        "candles_2min": last_n(mtf["2min"]),
         "candles_5min": last_n(candles_5m),
-        "candles_15min": last_n(mtf["15min"]),
+        "candles_15min": last_n(candles_15m),
         "candles_1hour": last_n(mtf["1hour"]),
         "indicators_5min": {
             "rsi_14": last_n(rsi_14),
@@ -316,6 +472,267 @@ async def get_technicals_for_symbol(symbol: str) -> dict:
             "current_ema_9": ema_9[-1] if ema_9 else None,
             "current_ema_21": ema_21[-1] if ema_21 else None,
         },
+        "structure_5min": {
+            "pivot_analysis": pivot_struct_5m,
+            "ema_crossover": ema_cross_5m,
+        },
+        "structure_15min": {
+            "pivot_analysis": pivot_struct_15m,
+            "ema_crossover": ema_cross_15m,
+        },
+        "chart_patterns_5min": patterns_5m,
+        "chart_patterns_15min": patterns_15m,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pivot structure & EMA crossover — reversal confirmation
+# ---------------------------------------------------------------------------
+
+def _candles_to_df(candles: List[dict]) -> pd.DataFrame:
+    """Convert a list of OHLCV dicts into a PatternPy-compatible DataFrame."""
+    df = pd.DataFrame(candles)
+    df = df.rename(columns={
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume",
+    })
+    df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=False)
+    df = df.dropna(subset=["date"])
+    df = df.set_index("date").sort_index()
+    return df
+
+
+
+def detect_pivot_structure(candles: List[dict], lookback: int = 10) -> dict:
+    """Identify the current pivot structure and whether a confirmed reversal break exists.
+
+    A *confirmed* reversal requires:
+    - A broken Lower High (LH) for a bullish reversal (BUY signal), OR
+    - A broken Higher Low (HL) for a bearish reversal (SELL signal).
+
+    Returns:
+        {
+          'pivots':          list of recent pivot signals (HH/LL/LH/HL),
+          'trend':           'bullish' | 'bearish' | 'neutral',
+          'lh_broken':       True if price closed above last LH (bullish breakout),
+          'hl_broken':       True if price closed below last HL (bearish breakout),
+          'reversal_signal': 'BUY' | 'SELL' | None,
+        }
+    """
+    if len(candles) < lookback + 5:
+        return {
+            "pivots": [],
+            "trend": "neutral",
+            "lh_broken": False,
+            "hl_broken": False,
+            "reversal_signal": None,
+        }
+
+    df = _candles_to_df(candles)
+    # find_pivots uses lowercase 'high'/'low'
+    df_p = df.rename(columns={"High": "high", "Low": "low", "Close": "close"})
+    df_p = find_pivots(df_p)
+
+    recent = df_p.tail(lookback)
+    pivot_list = [
+        {"date": str(idx), "signal": sig}
+        for idx, sig in recent["signal"].items()
+        if sig != ""
+    ]
+
+    # Determine broad trend: count HH vs LL in last N pivots
+    hh_count = sum(1 for p in pivot_list if p["signal"] == "HH")
+    ll_count = sum(1 for p in pivot_list if p["signal"] == "LL")
+    lh_count = sum(1 for p in pivot_list if p["signal"] == "LH")
+    hl_count = sum(1 for p in pivot_list if p["signal"] == "HL")
+
+    if hh_count > ll_count and hh_count > lh_count:
+        trend = "bullish"
+    elif ll_count > hh_count and ll_count > hl_count:
+        trend = "bearish"
+    else:
+        trend = "neutral"
+
+    # Find the most recent LH and HL price levels
+    last_lh_price: Optional[float] = None
+    last_hl_price: Optional[float] = None
+    for idx, row in df_p.iterrows():
+        if row["signal"] == "LH":
+            last_lh_price = float(row["high"])
+        elif row["signal"] == "HL":
+            last_hl_price = float(row["low"])
+
+    current_close = float(df["Close"].iloc[-1])
+
+    # Bullish reversal: current close breaks above last confirmed LH
+    lh_broken = (last_lh_price is not None) and (current_close > last_lh_price)
+    # Bearish reversal: current close breaks below last confirmed HL
+    hl_broken = (last_hl_price is not None) and (current_close < last_hl_price)
+
+    reversal_signal: Optional[str] = None
+    if lh_broken:
+        reversal_signal = "BUY"
+    elif hl_broken:
+        reversal_signal = "SELL"
+
+    return {
+        "pivots": pivot_list,
+        "trend": trend,
+        "lh_broken": lh_broken,
+        "hl_broken": hl_broken,
+        "last_lh_price": last_lh_price,
+        "last_hl_price": last_hl_price,
+        "reversal_signal": reversal_signal,
+    }
+
+
+def detect_ema_crossover(
+    closes: List[float], fast_period: int = 9, slow_period: int = 21
+) -> dict:
+    """Detect EMA crossover direction on the last two bars.
+
+    Returns:
+        {
+          'ema_fast': last value,
+          'ema_slow': last value,
+          'crossover': 'bullish' | 'bearish' | None,
+          'aligned':   True if fast > slow (bullish) or fast < slow (bearish)
+        }
+    """
+    fast = compute_ema(closes, fast_period)
+    slow = compute_ema(closes, slow_period)
+
+    # Need at least two valid values
+    valid_fast = [(i, v) for i, v in enumerate(fast) if v is not None]
+    valid_slow = [(i, v) for i, v in enumerate(slow) if v is not None]
+
+    crossover: Optional[str] = None
+    if len(valid_fast) >= 2 and len(valid_slow) >= 2:
+        prev_f, curr_f = valid_fast[-2][1], valid_fast[-1][1]
+        prev_s, curr_s = valid_slow[-2][1], valid_slow[-1][1]
+
+        if prev_f <= prev_s and curr_f > curr_s:
+            crossover = "bullish"  # fast crossed above slow
+        elif prev_f >= prev_s and curr_f < curr_s:
+            crossover = "bearish"  # fast crossed below slow
+
+    last_fast = fast[-1] if fast else None
+    last_slow = slow[-1] if slow else None
+
+    aligned: Optional[bool] = None
+    if last_fast is not None and last_slow is not None:
+        aligned = last_fast > last_slow  # True → bullish alignment
+
+    return {
+        "ema_fast": last_fast,
+        "ema_slow": last_slow,
+        "crossover": crossover,
+        "aligned_bullish": aligned,
+    }
+
+
+def compute_pattern_analysis(candles: List[dict]) -> dict:
+    """Run all PatternPy detectors on a candle list and return a compact summary.
+
+    Patterns detected:
+    - Head & Shoulders / Inverse H&S
+    - Multiple Tops / Bottoms
+    - Support & Resistance levels
+    - Ascending / Descending Triangles
+    - Wedge Up / Down
+    - Channel Up / Down
+    - Double Top / Bottom
+
+    Returns a dict with the most recent non-null signal for each pattern family,
+    plus the raw support / resistance levels.
+    """
+    if len(candles) < 10:
+        return {"error": "Insufficient candle data for pattern analysis (need >= 10 bars)"}
+
+    df = _candles_to_df(candles)
+
+    def _latest(series: pd.Series) -> Optional[str]:
+        """Return the last non-NaN, non-empty value."""
+        vals = series.dropna()
+        vals = vals[vals != ""]
+        return str(vals.iloc[-1]) if len(vals) > 0 else None
+
+    # Run each detector (they mutate a copy of df)
+    try:
+        df = detect_head_shoulder(df.copy())
+        hs = _latest(df.get("head_shoulder_pattern", pd.Series(dtype=str)))
+    except Exception:
+        hs = None
+
+    try:
+        df = detect_multiple_tops_bottoms(df.copy())
+        mtb = _latest(df.get("multiple_top_bottom_pattern", pd.Series(dtype=str)))
+    except Exception:
+        mtb = None
+
+    try:
+        df = calculate_support_resistance(df.copy())
+        support_level = round(float(df["support"].dropna().iloc[-1]), 4) if "support" in df.columns and df["support"].dropna().any() else None
+        resistance_level = round(float(df["resistance"].dropna().iloc[-1]), 4) if "resistance" in df.columns and df["resistance"].dropna().any() else None
+    except Exception:
+        support_level = None
+        resistance_level = None
+
+    try:
+        df = detect_triangle_pattern(df.copy())
+        triangle = _latest(df.get("triangle_pattern", pd.Series(dtype=str)))
+    except Exception:
+        triangle = None
+
+    try:
+        df = detect_wedge(df.copy())
+        wedge = _latest(df.get("wedge_pattern", pd.Series(dtype=str)))
+    except Exception:
+        wedge = None
+
+    try:
+        df = detect_channel(df.copy())
+        channel = _latest(df.get("channel_pattern", pd.Series(dtype=str)))
+    except Exception:
+        channel = None
+
+    try:
+        df = detect_double_top_bottom(df.copy())
+        double = _latest(df.get("double_pattern", pd.Series(dtype=str)))
+    except Exception:
+        double = None
+
+    # Collect active patterns
+    active_patterns = [p for p in [hs, mtb, triangle, wedge, channel, double] if p]
+
+    # Infer directional bias from patterns
+    bullish_keywords = ["Inverse Head", "Multiple Bottom", "Ascending", "Wedge Up", "Channel Up", "Double Bottom"]
+    bearish_keywords = ["Head and Shoulder", "Multiple Top", "Descending", "Wedge Down", "Channel Down", "Double Top"]
+
+    pattern_bias = "neutral"
+    bullish_score = sum(1 for p in active_patterns if any(k in p for k in bullish_keywords))
+    bearish_score = sum(1 for p in active_patterns if any(k in p for k in bearish_keywords))
+    if bullish_score > bearish_score:
+        pattern_bias = "bullish"
+    elif bearish_score > bullish_score:
+        pattern_bias = "bearish"
+
+    return {
+        "patterns": {
+            "head_and_shoulders": hs,
+            "multiple_tops_bottoms": mtb,
+            "triangle": triangle,
+            "wedge": wedge,
+            "channel": channel,
+            "double_top_bottom": double,
+        },
+        "active_patterns": active_patterns,
+        "pattern_bias": pattern_bias,
+        "support": support_level,
+        "resistance": resistance_level,
     }
 
 

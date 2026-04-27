@@ -20,6 +20,10 @@ from algokitforge.core.portfolio_mgr import (
     change_account_strategy,
     get_account_strategy,
     ALLOWED_SYMBOLS,
+    compute_pattern_analysis,
+    detect_pivot_structure,
+    detect_ema_crossover,
+    compute_ema,
 )
 
 mcp = FastMCP("ibkr_day_trader")
@@ -56,10 +60,10 @@ async def get_holdings(name: str) -> str:
 
 @mcp.tool()
 async def get_price(symbol: str) -> float:
-    """Get the current real-time price of MNQ or MGC.
+    """Get the current real-time price of the futures symbol.
 
     Args:
-        symbol: The futures symbol — must be 'MNQ' or 'MGC'
+        symbol: The futures symbol — e.g. 'MNQ' or 'MGC'
     """
     return await fetch_current_price(symbol)
 
@@ -69,8 +73,8 @@ async def get_candles(symbol: str, bar_size: str, duration: str) -> str:
     """Fetch historical candlestick (OHLCV) data for MNQ or MGC.
 
     Args:
-        symbol: The futures symbol — must be 'MNQ' or 'MGC'
-        bar_size: Bar size — use '5 mins', '15 mins', or '1 hour'
+        symbol: The futures symbol — e.g. 'MNQ' or 'MGC'
+        bar_size: Bar size — use '2 mins', '5 mins', '15 mins', or '1 hour'
         duration: Duration — use '1 D', '2 D', or '5 D'
     """
     candles = await fetch_candles(symbol, bar_size, duration)
@@ -80,15 +84,55 @@ async def get_candles(symbol: str, bar_size: str, duration: str) -> str:
 @mcp.tool()
 async def get_full_technicals(symbol: str) -> str:
     """Get complete technical analysis data for a symbol: multi-timeframe candles
-    (5-min, 15-min, 1-hour) plus RSI(14), Stochastic(14,3), EMA(9), EMA(21)
-    computed on the 5-minute timeframe. Use this as your primary analysis tool
-    before placing any trade.
+    (2-min, 5-min, 15-min, 1-hour) plus RSI(14), Stochastic(14,3), EMA(9), EMA(21)
+    computed on the 5-minute timeframe. Also includes pivot structure (HH/HL/LH/LL),
+    EMA crossover detection, and PatternPy chart patterns on 5-min and 15-min.
+    Use this as your PRIMARY analysis tool before considering any trade.
 
     Args:
-        symbol: The futures symbol — must be 'MNQ' or 'MGC'
+        symbol: The futures symbol — e.g. 'MNQ' or 'MGC'
     """
     data = await get_technicals_for_symbol(symbol)
     return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+async def get_pattern_analysis(symbol: str, timeframe: str = "5min") -> str:
+    """Run PatternPy chart-pattern recognition + pivot structure + EMA crossover
+    on the specified timeframe candles for a symbol. Use this for an additional
+    layer of confirmation before entering a trade.
+
+    Patterns detected: Head & Shoulders, Inverse H&S, Multiple Tops/Bottoms,
+    Ascending/Descending Triangles, Wedges, Channels (Up/Down), Double Top/Bottom.
+
+    Pivot structure: identifies HH, HL, LH, LL — and flags whether a confirmed
+    reversal break (LH broken for BUY / HL broken for SELL) is present.
+
+    Args:
+        symbol:    The futures symbol — e.g. 'MNQ' or 'MGC'
+        timeframe: Timeframe to analyze — '2min', '5min', '15min', or '1hour'
+    """
+    valid_tfs = {"2min": "2 mins", "5min": "5 mins", "15min": "15 mins", "1hour": "1 hour"}
+    dur_map   = {"2min": "1 D",  "5min": "1 D",    "15min": "2 D",    "1hour": "5 D"}
+
+    if timeframe not in valid_tfs:
+        return json.dumps({"error": f"Invalid timeframe '{timeframe}'. Choose from: {list(valid_tfs)}"})
+
+    candles = await fetch_candles(symbol, valid_tfs[timeframe], dur_map[timeframe])
+    closes  = [c["close"] for c in candles]
+
+    patterns  = compute_pattern_analysis(candles)
+    pivots    = detect_pivot_structure(candles, lookback=20)
+    ema_cross = detect_ema_crossover(closes, fast_period=9, slow_period=21)
+
+    result = {
+        "symbol":    symbol,
+        "timeframe": timeframe,
+        "chart_patterns": patterns,
+        "pivot_structure": pivots,
+        "ema_crossover":  ema_cross,
+    }
+    return json.dumps(result, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +167,7 @@ async def place_bracket_order(
 
     Args:
         name: The name of the account holder
-        symbol: The futures symbol — must be 'MNQ' or 'MGC'
+        symbol: The futures symbol — e.g. 'MNQ' or 'MGC'
         quantity: Number of contracts (keep low: 1 for normal, 2-3 for high probability)
         action: 'BUY' for long, 'SELL' for short
         entry_price: The limit/stop price for entry (ignored for MARKET)
@@ -131,7 +175,7 @@ async def place_bracket_order(
         stop_loss: Stop-loss price level
         order_type: 'LIMIT', 'STOP', 'STOP_LIMIT', or 'MARKET'
         rationale: Your detailed reasoning for this trade
-        timeframe_analysis: Summary of your multi-timeframe analysis (5m/15m/1h confluence)
+        timeframe_analysis: Summary of your multi-timeframe analysis (2m/5m/15m/1h confluence)
     """
     if order_type == "MARKET":
         return await execute_market_trade(
