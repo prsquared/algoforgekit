@@ -13,9 +13,11 @@ from algokitforge.core.portfolio_mgr import (
     get_technicals_for_symbol,
     execute_bracket_trade,
     execute_market_trade,
+    execute_close_position,
     fetch_open_orders,
     cancel_order,
     cancel_all_orders,
+    modify_order_prices,
     get_account_report,
     change_account_strategy,
     get_account_strategy,
@@ -151,6 +153,8 @@ async def place_bracket_order(
     order_type: str,
     rationale: str,
     timeframe_analysis: str,
+    strategy: str = "Manual",
+    allow_scaling: bool = False,
 ) -> str:
     """Place a bracket order with entry + take-profit + stop-loss.
     ALWAYS use this tool for placing trades. Every trade MUST have a TP and SL.
@@ -161,9 +165,17 @@ async def place_bracket_order(
     - Use STOP_LIMIT for precise breakout entries with a price cap
     - Use MARKET only when you need immediate execution
 
+    Strategy Selection:
+    - Choose the most appropriate strategy from: 'Pivot Reversal', 'EMA Crossover', 
+      'Trend Following', 'Mean Reversion', 'Chart Pattern', 'Breakout', 'Scalping'.
+    - Use 'Manual' only if none of the above fit your reasoning.
+
     Risk management rules:
     - Minimum 2:1 reward-to-risk ratio (distance to TP >= 2x distance to SL)
     - Keep position size low (1 contract) unless high-probability setup (max 2-3)
+    - POSITION LOCK: You are restricted to ONE active position/setup per instrument.
+      If you already have a position or open order for a symbol, this tool will REJECT
+      new orders for that symbol. You must evaluate and close/cancel the existing one first.
 
     Args:
         name: The name of the account holder
@@ -176,17 +188,37 @@ async def place_bracket_order(
         order_type: 'LIMIT', 'STOP', 'STOP_LIMIT', or 'MARKET'
         rationale: Your detailed reasoning for this trade
         timeframe_analysis: Summary of your multi-timeframe analysis (2m/5m/15m/1h confluence)
+        strategy: The trading strategy used (e.g. 'Pivot Reversal', 'Breakout', etc.)
+        allow_scaling: If True, allows adding to an existing position (up to 5 contracts max)
     """
     if order_type == "MARKET":
         return await execute_market_trade(
             name, symbol, quantity, action,
-            take_profit, stop_loss, rationale, timeframe_analysis
+            take_profit, stop_loss, rationale, timeframe_analysis,
+            strategy=strategy,
+            allow_scaling=allow_scaling
         )
     return await execute_bracket_trade(
         name, symbol, quantity, action,
         entry_price, take_profit, stop_loss,
-        order_type, rationale, timeframe_analysis
+        order_type, rationale, timeframe_analysis,
+        strategy=strategy,
+        allow_scaling=allow_scaling
     )
+
+
+@mcp.tool()
+async def close_position(name: str, symbol: str, rationale: str) -> str:
+    """Close any open position for the given symbol at market price immediately.
+    Use this to 'flatten' a position if it no longer fits your strategy or if
+    it is a 'naked' position (no stop-loss or take-profit orders).
+
+    Args:
+        name: The name of the account holder
+        symbol: The futures symbol — e.g. 'MNQ' or 'MGC'
+        rationale: Why you are closing the position
+    """
+    return await execute_close_position(name, symbol, rationale)
 
 
 # ---------------------------------------------------------------------------
@@ -204,10 +236,12 @@ async def get_open_orders() -> str:
 
 @mcp.tool()
 async def cancel_single_order(order_id: int) -> str:
-    """Cancel a specific order by its order ID.
+    """Cancel a specific order. 
+    You can provide either the session 'orderId' (short) or the IBKR 'permId' (long, as shown in TWS).
+    Using 'permId' is HIGHLY RECOMMENDED as it remains valid across app restarts and logins.
 
     Args:
-        order_id: The order ID to cancel
+        order_id: The order ID or PermID to cancel
     """
     return await cancel_order(order_id)
 
@@ -218,6 +252,24 @@ async def cancel_all_open_orders() -> str:
     WARNING: This cancels all pending entries, take-profits, and stop-losses.
     """
     return await cancel_all_orders()
+
+
+@mcp.tool()
+async def modify_order(
+    order_id: int,
+    new_limit_price: float = None,
+    new_stop_price: float = None,
+) -> str:
+    """Modify the prices of an existing open order. 
+    You can provide either the session 'orderId' (short) or the IBKR 'permId' (long).
+    Using 'permId' is RECOMMENDED for reliability.
+    
+    Args:
+        order_id: The ID or PermID of the order to modify
+        new_limit_price: New limit price (for LIMIT or STOP_LIMIT orders)
+        new_stop_price: New stop price (for STOP or STOP_LIMIT orders)
+    """
+    return await modify_order_prices(order_id, new_limit_price, new_stop_price)
 
 
 # ---------------------------------------------------------------------------
