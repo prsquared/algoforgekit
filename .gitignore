@@ -54,3 +54,7 @@ alice_portfolio.json
 # Project specific
 .python-version
 .ipynb_checkpoints/
+*.db
+*.backup_*
+scratch/
+*.code-workspace

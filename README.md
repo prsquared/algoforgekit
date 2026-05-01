@@ -77,10 +77,10 @@ The agent operates on a continuous 2-minute cycle (optimized for day trading), p
 
 ## 🧪 Testing
 
-Validation is handled via `pytest`. To run all tests:
+Validation is handled via `pytest`. To run the unit and integration tests:
 
 ```bash
-uv run pytest
+uv run python -m pytest
 ```
 
 ## 📜 License

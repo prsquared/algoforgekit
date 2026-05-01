@@ -31,7 +31,7 @@ def get_model(model_name: str):
         return OpenAIChatCompletionsModel(model=model_name, openai_client=openai_client)
 
 class Trader:
-    def __init__(self, name: str, model_name="gpt-4o-mini"):
+    def __init__(self, name: str, model_name="gpt-5-mini"):
         self.name = name
         self.agent = None
         self.model_name = model_name
