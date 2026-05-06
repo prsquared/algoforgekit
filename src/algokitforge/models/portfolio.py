@@ -11,6 +11,7 @@ class TradingStrategy(str, Enum):
     CHART_PATTERN = "Chart Pattern"
     BREAKOUT = "Breakout"
     SCALPING = "Scalping"
+    VWAP_PULLBACK = "VWAP Pullback"
     MANUAL = "Manual"
 
 class TradeStatus(str, Enum):

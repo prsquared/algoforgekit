@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import List, Optional
 from algokitforge.models.portfolio import Trade, TradingStrategy, TradeStatus
 
-DB_PATH = "trades.db"
+# Unified database path for both bot and journal
+DB_PATH = "/home/priyesh/projects/tradingjournal/trades.db"
 
 class DatabaseMgr:
     def __init__(self, db_path: str = DB_PATH):
@@ -41,6 +42,17 @@ class DatabaseMgr:
                 )
             """)
             conn.commit()
+            
+            # Migration to add new columns
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN commission REAL DEFAULT 0.0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN filled_quantity INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            conn.commit()
 
     def add_trade(self, trade: Trade) -> int:
         with sqlite3.connect(self.db_path) as conn:
@@ -62,46 +74,52 @@ class DatabaseMgr:
             conn.commit()
             return trade_id
 
-    def update_trade_fill(self, perm_id: int, fill_price: float, fill_time: str, order_id: Optional[int] = None):
+    def update_trade_fill(self, perm_id: int, fill_price: float, fill_time: str, order_id: Optional[int] = None, commission: float = 0.0):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            updated = False
+            
             if perm_id and perm_id != 0:
                 cursor.execute("""
                     UPDATE trades 
-                    SET fill_price = ?, fill_time = ?, status = ?
-                    WHERE perm_id = ? AND status = ?
-                """, (fill_price, fill_time, TradeStatus.FILLED.value, perm_id, TradeStatus.OPEN.value))
+                    SET fill_price = ?, fill_time = ?, status = ?, commission = COALESCE(commission, 0.0) + ?
+                    WHERE perm_id = ? AND status IN (?, ?, ?)
+                """, (fill_price, fill_time, TradeStatus.FILLED.value, commission, perm_id, TradeStatus.OPEN.value, TradeStatus.PLANNED.value, TradeStatus.FILLED.value))
+                if cursor.rowcount > 0:
+                    updated = True
             
-            if cursor.rowcount == 0 and order_id:
+            if not updated and order_id:
                 # Fallback to order_id if perm_id didn't match (e.g. if it was stored as 0)
                 cursor.execute("""
                     UPDATE trades 
-                    SET fill_price = ?, fill_time = ?, status = ?, perm_id = ?
-                    WHERE parent_order_id = ? AND status = ?
-                """, (fill_price, fill_time, TradeStatus.FILLED.value, perm_id, order_id, TradeStatus.OPEN.value))
+                    SET fill_price = ?, fill_time = ?, status = ?, perm_id = ?, commission = COALESCE(commission, 0.0) + ?
+                    WHERE parent_order_id = ? AND status IN (?, ?, ?)
+                """, (fill_price, fill_time, TradeStatus.FILLED.value, perm_id, commission, order_id, TradeStatus.OPEN.value, TradeStatus.PLANNED.value, TradeStatus.FILLED.value))
             conn.commit()
 
-    def update_trade_close(self, perm_id: int, exit_price: float, end_time: str, order_id: Optional[int] = None):
+    def update_trade_close(self, perm_id: int, exit_price: float, end_time: str, order_id: Optional[int] = None, commission: float = 0.0):
         """Update trade when TP, SL or Manual close hits."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            updated = False
+            
             # Match by parent perm_id (manual close) or child perm_id (TP/SL hit)
             if perm_id and perm_id != 0:
                 cursor.execute("""
                     UPDATE trades 
-                    SET exit_price = CASE WHEN exit_price IS NULL OR exit_price = 0 THEN ? ELSE exit_price END,
-                        end_time = ?, status = ?
+                    SET exit_price = ?, end_time = ?, status = ?, commission = COALESCE(commission, 0.0) + ?
                     WHERE (perm_id = ? OR tp_perm_id = ? OR sl_perm_id = ?)
-                """, (exit_price, end_time, TradeStatus.CLOSED.value, perm_id, perm_id, perm_id))
+                """, (exit_price, end_time, TradeStatus.CLOSED.value, commission, perm_id, perm_id, perm_id))
+                if cursor.rowcount > 0:
+                    updated = True
             
-            if cursor.rowcount == 0 and order_id:
+            if not updated and order_id:
                 # Fallback to order_id
                 cursor.execute("""
                     UPDATE trades 
-                    SET exit_price = CASE WHEN exit_price IS NULL OR exit_price = 0 THEN ? ELSE exit_price END,
-                        end_time = ?, status = ?
+                    SET exit_price = ?, end_time = ?, status = ?, commission = COALESCE(commission, 0.0) + ?
                     WHERE (parent_order_id = ? OR tp_order_id = ? OR sl_order_id = ?)
-                """, (exit_price, end_time, TradeStatus.CLOSED.value, order_id, order_id, order_id))
+                """, (exit_price, end_time, TradeStatus.CLOSED.value, commission, order_id, order_id, order_id))
             conn.commit()
 
     def get_trade_by_order_id(self, order_id: int) -> Optional[Trade]:
@@ -131,8 +149,8 @@ class DatabaseMgr:
                     tp_order_id=row['tp_order_id'],
                     sl_order_id=row['sl_order_id'],
                     perm_id=row['perm_id'],
-                    tp_perm_id=row.get('tp_perm_id'),
-                    sl_perm_id=row.get('sl_perm_id')
+                    tp_perm_id=row['tp_perm_id'] if 'tp_perm_id' in row.keys() else None,
+                    sl_perm_id=row['sl_perm_id'] if 'sl_perm_id' in row.keys() else None
                 )
         return None
 
@@ -170,8 +188,8 @@ class DatabaseMgr:
                     tp_order_id=row['tp_order_id'],
                     sl_order_id=row['sl_order_id'],
                     perm_id=row['perm_id'],
-                    tp_perm_id=row.get('tp_perm_id'),
-                    sl_perm_id=row.get('sl_perm_id')
+                    tp_perm_id=row['tp_perm_id'] if 'tp_perm_id' in row.keys() else None,
+                    sl_perm_id=row['sl_perm_id'] if 'sl_perm_id' in row.keys() else None
                 )
         return None
 
@@ -186,23 +204,26 @@ class DatabaseMgr:
             # We use it to match either perm_id or parent_order_id.
             # To be safe, we only cancel the most recent matching OPEN/PLANNED trade if it's a session ID.
             if identifier > 100000: # Heuristic for perm_id
+                # ONLY cancel if it's the parent perm_id.
+                # Cancelling a child leg (TP/SL) should NOT cancel the parent trade.
                 cursor.execute("""
                     UPDATE trades 
                     SET status = ?
-                    WHERE (perm_id = ? OR tp_perm_id = ? OR sl_perm_id = ?) 
+                    WHERE perm_id = ?
                     AND status IN (?, ?)
-                """, (TradeStatus.CANCELLED.value, identifier, identifier, identifier, TradeStatus.OPEN.value, TradeStatus.PLANNED.value))
+                """, (TradeStatus.CANCELLED.value, identifier, TradeStatus.OPEN.value, TradeStatus.PLANNED.value))
             else:
+                # ONLY cancel if it's the parent_order_id.
                 cursor.execute("""
                     UPDATE trades 
                     SET status = ?
                     WHERE id = (
                         SELECT id FROM trades 
-                        WHERE (parent_order_id = ? OR tp_order_id = ? OR sl_order_id = ?)
+                        WHERE parent_order_id = ?
                         AND status IN (?, ?)
                         ORDER BY id DESC LIMIT 1
                     )
-                """, (TradeStatus.CANCELLED.value, identifier, identifier, identifier, TradeStatus.OPEN.value, TradeStatus.PLANNED.value))
+                """, (TradeStatus.CANCELLED.value, identifier, TradeStatus.OPEN.value, TradeStatus.PLANNED.value))
             conn.commit()
 
     def update_trade_status(self, identifier: int, status: TradeStatus):
@@ -225,6 +246,34 @@ class DatabaseMgr:
                         ORDER BY id DESC LIMIT 1
                     )
                 """, (status.value, identifier, identifier, identifier))
+            conn.commit()
+
+            conn.commit()
+
+    def sync_perm_id(self, order_id: int, perm_id: int):
+        """Update the perm_id of a trade if it was initially missing (0)."""
+        if not order_id or not perm_id:
+            return
+            
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE trades 
+                SET perm_id = ?
+                WHERE parent_order_id = ? AND (perm_id IS NULL OR perm_id = 0)
+            """, (perm_id, order_id))
+            
+            cursor.execute("""
+                UPDATE trades 
+                SET tp_perm_id = ?
+                WHERE tp_order_id = ? AND (tp_perm_id IS NULL OR tp_perm_id = 0)
+            """, (perm_id, order_id))
+            
+            cursor.execute("""
+                UPDATE trades 
+                SET sl_perm_id = ?
+                WHERE sl_order_id = ? AND (sl_perm_id IS NULL OR sl_perm_id = 0)
+            """, (perm_id, order_id))
             conn.commit()
 
 db_mgr = DatabaseMgr()

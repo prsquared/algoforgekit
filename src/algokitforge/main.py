@@ -37,8 +37,8 @@ async def main():
 
         print("Starting a market analysis round...")
         await trader.run()
-        print("Market analysis round finished. Waiting 2 minutes for next candle...")
-        await asyncio.sleep(120)  # Faster cycle for day trading (every 2 mins)
+        print("Market analysis round finished. Waiting 1 minute for next candle...")
+        await asyncio.sleep(60)  # Faster cycle for day trading (every 2 mins)
 
 if __name__ == "__main__":
     try:

@@ -86,9 +86,10 @@ async def get_candles(symbol: str, bar_size: str, duration: str) -> str:
 @mcp.tool()
 async def get_full_technicals(symbol: str) -> str:
     """Get complete technical analysis data for a symbol: multi-timeframe candles
-    (2-min, 5-min, 15-min, 1-hour) plus RSI(14), Stochastic(14,3), EMA(9), EMA(21)
-    computed on the 5-minute timeframe. Also includes pivot structure (HH/HL/LH/LL),
-    EMA crossover detection, and PatternPy chart patterns on 5-min and 15-min.
+    (2-min, 5-min, 15-min, 1-hour) plus RSI(14), Stochastic(14,3), EMA(9), EMA(21),
+    and Session VWAP (anchored to 9:30 AM ET) computed on the 5-minute timeframe.
+    Also includes pivot structure (HH/HL/LH/LL), EMA crossover detection, and 
+    PatternPy chart patterns on 5-min and 15-min.
     Use this as your PRIMARY analysis tool before considering any trade.
 
     Args:
@@ -100,7 +101,7 @@ async def get_full_technicals(symbol: str) -> str:
 
 @mcp.tool()
 async def get_pattern_analysis(symbol: str, timeframe: str = "5min") -> str:
-    """Run PatternPy chart-pattern recognition + pivot structure + EMA crossover
+    """Run PatternPy chart-pattern recognition + pivot structure + EMA crossover + Session VWAP
     on the specified timeframe candles for a symbol. Use this for an additional
     layer of confirmation before entering a trade.
 
@@ -126,6 +127,7 @@ async def get_pattern_analysis(symbol: str, timeframe: str = "5min") -> str:
     patterns  = compute_pattern_analysis(candles)
     pivots    = detect_pivot_structure(candles, lookback=20)
     ema_cross = detect_ema_crossover(closes, fast_period=9, slow_period=21)
+    vwap      = compute_session_vwap(candles)
 
     result = {
         "symbol":    symbol,
@@ -133,6 +135,7 @@ async def get_pattern_analysis(symbol: str, timeframe: str = "5min") -> str:
         "chart_patterns": patterns,
         "pivot_structure": pivots,
         "ema_crossover":  ema_cross,
+        "vwap": vwap[-1] if vwap else None,
     }
     return json.dumps(result, indent=2)
 
@@ -153,7 +156,7 @@ async def place_bracket_order(
     order_type: str,
     rationale: str,
     timeframe_analysis: str,
-    strategy: str = "Manual",
+    strategy: str,
     allow_scaling: bool = False,
 ) -> str:
     """Place a bracket order with entry + take-profit + stop-loss.
@@ -166,9 +169,9 @@ async def place_bracket_order(
     - Use MARKET only when you need immediate execution
 
     Strategy Selection:
-    - Choose the most appropriate strategy from: 'Pivot Reversal', 'EMA Crossover', 
-      'Trend Following', 'Mean Reversion', 'Chart Pattern', 'Breakout', 'Scalping'.
-    - Use 'Manual' only if none of the above fit your reasoning.
+    - You MUST identify and choose the most appropriate strategy from: 'Pivot Reversal', 
+      'EMA Crossover', 'Trend Following', 'Mean Reversion', 'Chart Pattern', 'Breakout', 'Scalping'.
+    - DO NOT use 'Manual'. Always classify the trade into one of the actual strategies.
 
     Risk management rules:
     - Minimum 2:1 reward-to-risk ratio (distance to TP >= 2x distance to SL)
@@ -186,7 +189,7 @@ async def place_bracket_order(
         take_profit: Take-profit price level
         stop_loss: Stop-loss price level
         order_type: 'LIMIT', 'STOP', 'STOP_LIMIT', or 'MARKET'
-        rationale: Your detailed reasoning for this trade
+        rationale: Your reasoning for this trade (MUST NOT exceed 30 characters)
         timeframe_analysis: Summary of your multi-timeframe analysis (2m/5m/15m/1h confluence)
         strategy: The trading strategy used (e.g. 'Pivot Reversal', 'Breakout', etc.)
         allow_scaling: If True, allows adding to an existing position (up to 5 contracts max)
@@ -216,7 +219,7 @@ async def close_position(name: str, symbol: str, rationale: str) -> str:
     Args:
         name: The name of the account holder
         symbol: The futures symbol — e.g. 'MNQ' or 'MGC'
-        rationale: Why you are closing the position
+        rationale: Why you are closing the position (MUST NOT exceed 30 characters)
     """
     return await execute_close_position(name, symbol, rationale)
 
