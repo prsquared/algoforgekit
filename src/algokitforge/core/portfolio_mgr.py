@@ -599,11 +599,13 @@ async def get_technicals_for_symbol(symbol: str) -> dict:
         candle_status_5m = _compute_candle_status(c5, 5)
         candle_status_15m = _compute_candle_status(c15, 15) if c15 else {"status": "unknown"}
         
-        # Separate closed candles from the forming candle for indicators
-        # Indicators should be computed on CLOSED candles only
-        if c5 and not candle_status_5m["is_closed"]:
-            closed_5m = c5[:-1]  # exclude the forming candle
-            forming_5m = c5[-1]  # the live candle
+        # Always provide the last FULLY closed candle separately.
+        # IBKR almost always includes the live/forming bar as the last element.
+        # The penultimate bar is always definitely closed; the last bar may be
+        # closed or still forming depending on timing within the 5-min window.
+        if len(c5) >= 2:
+            closed_5m = c5[:-1]   # all bars except the last are definitely closed
+            forming_5m = c5[-1]   # the last bar (status shown in candle_status)
         else:
             closed_5m = c5
             forming_5m = None
