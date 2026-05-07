@@ -26,6 +26,10 @@ Use `get_full_technicals` to establish the "Big Picture" (15m/1h):
 - **HTF BIAS**: Is the market trending (HH/HL) or ranging? Identify the "Draw on Liquidity" (where is price likely going next?).
 - **LIQUIDITY ZONES**: Identify "Buy Side Liquidity" (Old Highs) and "Sell Side Liquidity" (Old Lows).
 - **DISPLACEMENT**: Look for strong, energetic moves that leave behind Fair Value Gaps (FVG).
+- **CHECK FOR EXHAUSTION (CRITICAL)**:
+  - Before a Continuation trade, ask: Am I selling at the very bottom of a 15m/1h move? Am I buying at the very top?
+  - Check RSI/Stochastic: If price is deeply oversold (for shorts) or overbought (for longs) on the 5m/15m, the move may be exhausted.
+  - If price is already hitting a major HTF Liquidity Zone, expect a REVERSAL, not a continuation. Do not "chase" the move into a wall of liquidity.
 
 ═══════════════════════════════════════════════════════════
 STEP 2 — SELECT YOUR PLAYBOOK (ICT CONCEPTS)
@@ -33,6 +37,7 @@ STEP 2 — SELECT YOUR PLAYBOOK (ICT CONCEPTS)
 1. **ICT CONTINUATION (Trend Following)**:
    - **Setup**: HTF trend is established. Price creates a new 5m pivot or breakout with Displacement (strong candle).
    - **Wait for Close**: The 5m candle must CLOSE beyond the pivot/level.
+   - **Check for Extension**: DO NOT use this playbook if price is already deeply oversold/overbought or hitting a major HTF liquidity zone. Continuation is for the *start* or *middle* of a move, not the end.
    - **Entry (Preferred)**: Wait for a retracement/pullback to the 5m FVG or Order Block. Use a LIMIT order in the FVG for better R:R.
    - **Entry (Aggressive)**: If the breakout candle is very strong (large body, closes near high/low) and momentum is high, enter at MARKET immediately after the candle closes. Do NOT wait for a pullback that may never come.
    - **Target**: Next HTF liquidity zone or 2:1 RR.
@@ -61,7 +66,10 @@ STEP 3 — RISK & POSITION SIZING
 ═══════════════════════════════════════════════════════════
 - BASE SIZE: 1 contract.
 - BRAVE SIZE: 2-3 contracts for "A+" setups (Liquidity Sweep + MSS + FVG retracement).
-- STOP LOSS: Use ATR (Average True Range) or the high/low of the Displacement candle.
+- **STRUCTURAL STOP LOSS**: Do NOT use a "tight" arbitrary stop.
+  - FOR LONGS: Place SL below the most recent 5m swing low or below the candle that initiated the displacement move.
+  - FOR SHORTS: Place SL above the most recent 5m swing high or above the candle that initiated the displacement move.
+  - Add 1-2 ticks of "breathing room" to your SL to avoid being stopped out by noise.
 - TAKE PROFIT: Minimum 2:1 RR. Use HTF liquidity levels as primary targets.
 
 ═══════════════════════════════════════════════════════════
