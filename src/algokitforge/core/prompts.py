@@ -72,16 +72,24 @@ STEP 4 — ACTIVE TRADE MANAGEMENT
 - **CUT EARLY**: If the 5m candle closes back inside the FVG or invalidates the MSS, EXIT immediately.
 
 ═══════════════════════════════════════════════════════════
-STEP 5 — TIME-BASED INVALIDATION
+STEP 5 — ORDER HYGIENE & TIME-BASED INVALIDATION
 ═══════════════════════════════════════════════════════════
-- 10-MINUTE RULE: If your retracement limit order hasn't filled within 10 minutes, the "engine" of the move may be fading. Re-evaluate and likely cancel.
-- TARGET REACHED: If price reaches your TP level without filling your entry limit, CANCEL the order.
+- **5-MINUTE RULE**: If a LIMIT entry order hasn't filled within 5 minutes, the setup is likely stale. CANCEL IT immediately using `cancel_single_order`. Then re-check technicals — if a new setup exists, place a fresh order at the current optimal level.
+- **PRICE-AWAY RULE**: If the current price has moved MORE THAN 1 ATR away from your unfilled entry order, the market has moved on. CANCEL the order immediately. Look for a new entry at the current price action.
+- **TARGET REACHED**: If price reaches your TP level without filling your entry limit, CANCEL the order.
+- **SETUP INVALIDATED**: If the 5m candle closes in the opposite direction of your pending entry, CANCEL immediately.
+- **AFTER CANCELLING**: Always re-evaluate the market for a fresh setup. A cancelled order frees you to enter at a better level or take a different play. Do NOT just cancel and sit idle.
 
 ═══════════════════════════════════════════════════════════
 STEP 6 — EXECUTION CHECKLIST
 ═══════════════════════════════════════════════════════════
 MANDATORY (all three must be YES):
-1. **DOES `last_closed_candle` SHOW A CONFIRMATION SIGNAL?** → Bullish: Hammer, Bullish Engulfing, Piercing, Morning Star, or a strong bullish close above a key level. Bearish: Shooting Star, Bearish Engulfing, Evening Star, or a strong bearish close below a key level.
+1. **DOES `last_closed_candle` CONFIRM DIRECTIONAL INTENT?** → Any of these count:
+   - **Named patterns**: Hammer, Bullish Engulfing, Piercing, Morning Star, Shooting Star, Bearish Engulfing, Evening Star.
+   - **Directional strength**: A candle that closes strongly in one direction — large body, small wicks, closes near its high (bullish) or low (bearish).
+   - **Level break**: A candle that closes ABOVE resistance or BELOW support (even without a textbook pattern name).
+   - **Momentum continuation**: A candle that closes in the direction of the trend with the body > 50% of the total range.
+   - In short: if the closed candle clearly shows buyers or sellers are in control, that IS confirmation. You do NOT need a textbook pattern name.
 2. **IS THERE HTF ALIGNMENT?** → Does the 15m/1h structure support the trade direction?
 3. **IS THE RR AT LEAST 2:1?**
 - **IF ANY MANDATORY ITEM IS "NO": DO NOT TRADE.**
@@ -121,7 +129,12 @@ def trade_message(name, strategy, account):
      - Use `get_full_technicals(symbol)` to find logical levels and place the missing orders using `modify_order` (if a partial bracket exists) or by noting the gap and closing/re-protecting.
    → For any symbol with an open position OR open order: Call `get_full_technicals(symbol)` IMMEDIATELY.
    → MANAGE: If you have an open position, analyze price action. Trail stop or move to BE.
-   → PRUNE: If you have an open ENTRY order: check its `timestamp` and the current technicals. If it is >10 minutes old OR if the setup is now invalidated, you MUST CANCEL it (use `cancel_single_order` on the Parent ID).
+   → **AGGRESSIVE PRUNE**: If you have an open ENTRY order, check IMMEDIATELY:
+     a) Is the order > 5 minutes old? → CANCEL IT.
+     b) Has price moved > 1 ATR away from the entry price? → CANCEL IT.
+     c) Has the setup been invalidated (candle closed against the direction)? → CANCEL IT.
+     d) After cancelling, DO NOT STOP — immediately re-evaluate for a fresh setup at the current price.
+     Use `cancel_single_order` on the Parent Order ID to cancel the entire bracket.
 
 2. NEW OPPORTUNITIES (for each allowed symbol: {', '.join(ALLOWED_SYMBOLS)})
    → Call get_full_technicals(symbol).
