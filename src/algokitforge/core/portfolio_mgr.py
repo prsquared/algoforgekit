@@ -531,6 +531,39 @@ def compute_session_vwap(candles):
         "std": df['std'].replace({np.nan: None}).tolist()
     }
 
+def _compute_candle_status(candles: List[dict], bar_minutes: int) -> dict:
+    """Determine if the last candle in the list is CLOSED or still FORMING.
+    
+    IBKR timestamps bars at their OPEN time. So a 5-min bar stamped '18:05'
+    covers 18:05:00 – 18:09:59 and is only closed once current time >= 18:10.
+    We compare current ET time against (last_bar_open + bar_duration).
+    """
+    if not candles:
+        return {"status": "unknown", "last_candle_time": None}
+    
+    from datetime import timedelta
+    last = candles[-1]
+    try:
+        dt = pd.to_datetime(last["date"])
+        if dt.tzinfo is None:
+            dt = dt.tz_localize('UTC')
+        dt_et = dt.tz_convert('America/New_York')
+    except Exception:
+        return {"status": "unknown", "last_candle_time": str(last["date"])}
+    
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    candle_close_time = dt_et + timedelta(minutes=bar_minutes)
+    
+    is_closed = now_et >= candle_close_time
+    
+    return {
+        "status": "CLOSED" if is_closed else "FORMING",
+        "last_candle_open": dt_et.strftime("%H:%M"),
+        "candle_closes_at": candle_close_time.strftime("%H:%M"),
+        "current_time": now_et.strftime("%H:%M:%S"),
+        "is_closed": is_closed,
+    }
+
 async def get_technicals_for_symbol(symbol: str) -> dict:
     try:
         mtf = await fetch_multi_timeframe_candles(symbol)
@@ -562,6 +595,19 @@ async def get_technicals_for_symbol(symbol: str) -> dict:
         
         c1h = mtf["1hour"]
 
+        # Compute candle close status for each timeframe
+        candle_status_5m = _compute_candle_status(c5, 5)
+        candle_status_15m = _compute_candle_status(c15, 15) if c15 else {"status": "unknown"}
+        
+        # Separate closed candles from the forming candle for indicators
+        # Indicators should be computed on CLOSED candles only
+        if c5 and not candle_status_5m["is_closed"]:
+            closed_5m = c5[:-1]  # exclude the forming candle
+            forming_5m = c5[-1]  # the live candle
+        else:
+            closed_5m = c5
+            forming_5m = None
+        
         return {
             "symbol": symbol,
             "timeframe_2min": {
@@ -570,6 +616,9 @@ async def get_technicals_for_symbol(symbol: str) -> dict:
                 "ema_crossover": detect_ema_crossover(cl2, 9, 21) if cl2 else None
             },
             "timeframe_5min": {
+                "candle_status": candle_status_5m,
+                "last_closed_candle": closed_5m[-1] if closed_5m else None,
+                "forming_candle": forming_5m,
                 "candles": c5[-30:],
                 "indicators": {
                     "rsi": rsi5[-1], 
@@ -586,6 +635,7 @@ async def get_technicals_for_symbol(symbol: str) -> dict:
                 "patterns": compute_pattern_analysis(c5)
             },
             "timeframe_15min": {
+                "candle_status": candle_status_15m,
                 "candles": c15[-20:] if c15 else [],
                 "indicators": {
                     "ema_9": e9_15[-1] if e9_15 else None, 

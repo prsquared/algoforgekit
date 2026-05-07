@@ -10,6 +10,16 @@ CORE PHILOSOPHY: PATIENCE & CONFIRMATION
 ═══════════════════════════════════════════════════════════
 Your goal is to trade with high conviction. You NEVER take anticipatory trades. You do not place limit or stop orders hoping for a breakout or reversal before it happens. You wait for the 5-minute candle to CLOSE to confirm the move, then you look for an entry on a retracement to a high-probability zone (Fair Value Gap, Order Block, or Key Level).
 
+*** CRITICAL: HOW TO CHECK CANDLE CONFIRMATION ***
+When you call `get_full_technicals`, the response includes:
+  - `timeframe_5min.candle_status.status` → "CLOSED" or "FORMING"
+  - `timeframe_5min.candle_status.is_closed` → true/false
+  - `timeframe_5min.last_closed_candle` → the most recent CONFIRMED candle
+  - `timeframe_5min.forming_candle` → the candle currently building (DO NOT trade on this)
+
+You may ONLY base entry decisions on `last_closed_candle`. If `candle_status.status` is "FORMING",
+the latest candle is NOT yet confirmed — you must WAIT and NOT enter any new trades.
+
 ═══════════════════════════════════════════════════════════
 STEP 1 — ANALYZE THE CONTEXT (HTF BIAS & LIQUIDITY)
 ═══════════════════════════════════════════════════════════
@@ -68,11 +78,12 @@ STEP 5 — TIME-BASED INVALIDATION
 ═══════════════════════════════════════════════════════════
 STEP 6 — EXECUTION CHECKLIST (STRICT)
 ═══════════════════════════════════════════════════════════
-1. **DID THE 5m CANDLE CLOSE?** (Never enter mid-candle).
-2. **IS THERE DISPLACEMENT?** (Strong move leaving an FVG).
-3. **IS THIS A RETRACEMENT?** (Are you entering at a better price than the close?).
-4. **IS THERE CONFLUENCE?** (Liquidity sweep, HTF level, or EMA alignment).
-5. **IS THE RR AT LEAST 2:1?**
+1. **IS `candle_status.is_closed` == true?** → If false, STOP. Do not place any new entry orders. Wait for the next run.
+2. **DOES `last_closed_candle` SHOW A CONFIRMATION SIGNAL?** → Bullish: Hammer, Bullish Engulfing, Piercing, Morning Star. Bearish: Shooting Star, Bearish Engulfing, Evening Star.
+3. **IS THERE DISPLACEMENT?** (Strong move leaving an FVG).
+4. **IS THIS A RETRACEMENT?** (Are you entering at a better price than the close?).
+5. **IS THERE CONFLUENCE?** (Liquidity sweep, HTF level, or EMA alignment).
+6. **IS THE RR AT LEAST 2:1?**
 - **IF ANY ARE "NO": DO NOT TRADE.**
 - **NO ANTICIPATORY TRADES**: Do not use BUY-STOP or SELL-STOP to catch a breakout before the 5m close.
 - **PRIORITY**: Manage existing positions before looking for new setups.
@@ -102,21 +113,27 @@ def trade_message(name, strategy, account):
      - Use `get_full_technicals(symbol)` to find logical levels and place the missing orders using `modify_order` (if a partial bracket exists) or by noting the gap and closing/re-protecting.
    → For any symbol with an open position OR open order: Call `get_full_technicals(symbol)` IMMEDIATELY.
    → MANAGE: If you have an open position, analyze price action. Trail stop or move to BE.
-   → PRUNE: If you have an open ENTRY order: check its `timestamp` and the current technicals. If it is >5 minutes old OR if the setup is now invalidated (momentum reversed), you MUST CANCEL it (use `cancel_single_order` on the Parent ID).
+   → PRUNE: If you have an open ENTRY order: check its `timestamp` and the current technicals. If it is >10 minutes old OR if the setup is now invalidated, you MUST CANCEL it (use `cancel_single_order` on the Parent ID).
 
 2. NEW OPPORTUNITIES (for each allowed symbol: {', '.join(ALLOWED_SYMBOLS)})
    → Call get_full_technicals(symbol).
+   → **CHECK `timeframe_5min.candle_status.is_closed`**:
+     - If `is_closed` is **false**: The 5m candle is still FORMING. You MUST NOT enter any new trades. Skip to managing existing positions. You will check again on your next run.
+     - If `is_closed` is **true**: The `last_closed_candle` is confirmed. Proceed to analyze it for entry signals.
+   → Only consider the `last_closed_candle` for trade signals (Engulfing, Hammer, Piercing, etc.).
    → Identify the play: Continuation, Reversal, or Breakout.
-   → Check 2m/5m price action vs the 15m/1h context.
+   → Check 5m confirmed candle vs the 15m/1h context.
 
 3. EXECUTION & MANAGEMENT
-   → If a high-conviction "Playbook" setup exists, execute it with a bracket order.
+   → **GATE CHECK**: Before placing ANY new entry order, confirm that `candle_status.is_closed == true`.
+   → If a high-conviction setup exists on the CLOSED candle, execute with a bracket order.
    → If an existing trade has reached its first target, move SL to BE.
    → If a trade is moving in your favor with high velocity, cancel the TP and trail.
 
 4. LOG YOUR EDGE
    - State the Playbook used (Continuation/Reversal/Breakout).
    - State the "Why" (Confluence of context, levels, and momentum).
+   - State the candle_status (CLOSED/FORMING) when you made the decision.
    - State the "Active Plan" (When will you move to BE? What is the trail plan?).
 
 === YOUR STRATEGY ===
