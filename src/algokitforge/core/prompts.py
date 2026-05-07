@@ -33,25 +33,28 @@ STEP 2 — SELECT YOUR PLAYBOOK (ICT CONCEPTS)
 1. **ICT CONTINUATION (Trend Following)**:
    - **Setup**: HTF trend is established. Price creates a new 5m pivot or breakout with Displacement (strong candle).
    - **Wait for Close**: The 5m candle must CLOSE beyond the pivot/level.
-   - **Entry**: Do NOT chase. Wait for a retracement/pullback to the 5m Fair Value Gap (FVG) or the "Order Block" (the candle before the move). Use a LIMIT order in the FVG.
+   - **Entry (Preferred)**: Wait for a retracement/pullback to the 5m FVG or Order Block. Use a LIMIT order in the FVG for better R:R.
+   - **Entry (Aggressive)**: If the breakout candle is very strong (large body, closes near high/low) and momentum is high, enter at MARKET immediately after the candle closes. Do NOT wait for a pullback that may never come.
    - **Target**: Next HTF liquidity zone or 2:1 RR.
 
 2. **ICT REVERSAL (Liquidity Sweep & MSS)**:
    - **Setup**: Price sweeps an HTF (15m/1h) Liquidity Zone (Old High/Low) or hits a 2.0+ VWAP Deviation.
    - **Confirmation**: Wait for a **Market Structure Shift (MSS)** — a 5m candle close that breaks the recent swing low (for shorts) or high (for longs).
    - **Candle Signal**: Look for a rejection candle (Hammer, Shooting Star, Engulfing, Piercing) that closes on the 5m chart.
-   - **Entry**: Enter on a retracement to the FVG created by the displacement move that caused the MSS.
-   - **Stop Loss**: Just beyond the liquidity sweep extreme.
+   - **Entry (Preferred)**: Enter on a retracement to the FVG created by the displacement move.
+   - **Entry (Aggressive)**: If the MSS candle shows strong displacement with no immediate pullback, enter at MARKET. Place SL just beyond the liquidity sweep extreme.
 
 3. **MOMENTUM BREAKOUT (Confirmed)**:
    - **Setup**: Price is in a tight consolidation or "Squeeze".
    - **Confirmation**: A 5m candle must CLOSE clearly outside the consolidation range with high volume.
-   - **Entry**: Wait for a "Retest" of the breakout level or a pullback to the FVG created by the breakout candle. Never enter via Buy-Stop/Sell-Stop before the close.
+   - **Entry (Preferred)**: Wait for a retest of the breakout level or pullback to the FVG. Use a LIMIT order.
+   - **Entry (Aggressive)**: If the breakout candle is decisive (large body, closes at its extreme, high volume), enter at MARKET on the candle close. Strong breakouts often do NOT retest — do not miss them waiting for a pullback.
+   - **CRITICAL**: Never enter via Buy-Stop/Sell-Stop BEFORE the candle closes. But once a strong candle HAS closed confirming the breakout, a MARKET entry is valid.
 
 4. **VWAP PULLBACK (ICT Confluence)**:
    - **Setup**: HTF Trend is clear. Price pulls back to test VWAP.
    - **Confirmation**: A 5m bullish/bearish rejection candle (Long Wick) CLOSES at VWAP, ideally overlapping with an FVG or Order Block.
-   - **Entry**: Enter as the 5m candle closes and price starts to move away from VWAP.
+   - **Entry**: Enter at MARKET as the 5m candle closes and price starts to move away from VWAP. This setup already IS the retracement — do not wait for another pullback.
 
 ═══════════════════════════════════════════════════════════
 STEP 3 — RISK & POSITION SIZING
